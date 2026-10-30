@@ -374,6 +374,25 @@ static inline void filetime_to_timespec(const FILETIME *ft, struct timespec *ts)
 	ts->tv_nsec = (hnsec % 10000000) * 100;
 }
 
+/*
+ * st_ctim: the latest of ChangeTime, CreationTime and LastWriteTime.
+ * FAT and exFAT lack ChangeTime (it reads as 0, 1980-01-01 or LastWriteTime
+ * depending on the API), but the latest of the three is consistent.
+ */
+static inline void filetimes_to_ctim(const LARGE_INTEGER *change,
+				     const LARGE_INTEGER *creation,
+				     const LARGE_INTEGER *last_write,
+				     struct timespec *ts)
+{
+	const LARGE_INTEGER *latest = change;
+
+	if (creation->QuadPart > latest->QuadPart)
+		latest = creation;
+	if (last_write->QuadPart > latest->QuadPart)
+		latest = last_write;
+	filetime_to_timespec((const FILETIME *)latest, ts);
+}
+
 struct mingw_stat {
     _dev_t st_dev;
     _ino_t st_ino;
