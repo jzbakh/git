@@ -1,13 +1,12 @@
-# Reproduit git-for-windows/git#3707 : Git ne voit pas une modification
-# quand un fichier est supprime puis recree avec la meme taille et la meme
-# date de modification.
+# Reproduces git-for-windows/git#3707: Git misses a change when a file is
+# deleted and recreated with the same size and the same modification time.
 #
-# Usage :
+# Usage:
 #   powershell -ExecutionPolicy Bypass -File repro-3707.ps1
-#   powershell -ExecutionPolicy Bypass -File repro-3707.ps1 -Git C:\chemin\vers\git.exe
+#   powershell -ExecutionPolicy Bypass -File repro-3707.ps1 -Git C:\path\to\git.exe
 #
-# Bug present  : les deux "git status" sont vides.
-# Bug corrige  : les deux "git status" affichent " M a.txt".
+# Bug present: both "git status" outputs are empty.
+# Bug fixed:   both "git status" outputs show " M a.txt".
 param([string]$Git = 'git')
 
 $ErrorActionPreference = 'Stop'
@@ -62,18 +61,21 @@ try {
   (Get-Item $f).LastWriteTime = $old
   & $Git add a.txt
   & $Git commit -qm init
-  Show 'avant' $f
+  Show 'before' $f
 
-  # Supprimer puis recreer : meme nom, meme taille, contenu different,
-  # et on remet l'ancienne date de modification.
+  # Git compares ctime with one-second granularity.
+  Start-Sleep -Seconds 1
+
+  # Delete and recreate: same name, same size, other content,
+  # and the old modification time.
   Remove-Item $f
   Set-Content $f 'BBBB' -NoNewline
   (Get-Item $f).LastWriteTime = $old
-  Show 'apres' $f
+  Show 'after' $f
 
-  "disque : $(Get-Content $f -Raw)   commit : $(& $Git show HEAD:a.txt)"
-  "git status (core.fscache=false) :"; & $Git -c core.fscache=false status --short
-  "git status (core.fscache=true)  :"; & $Git -c core.fscache=true status --short
+  "disk: $(Get-Content $f -Raw)   commit: $(& $Git show HEAD:a.txt)"
+  "git status (core.fscache=false):"; & $Git -c core.fscache=false status --short
+  "git status (core.fscache=true):"; & $Git -c core.fscache=true status --short
 } finally {
   Pop-Location
 }
