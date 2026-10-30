@@ -1,0 +1,91 @@
+name: probe-3707
+
+on: push
+
+jobs:
+  probe:
+    name: probe (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: system info
+      shell: pwsh
+      run: |
+        (Get-CimInstance Win32_OperatingSystem) | Format-List Caption, Version, BuildNumber
+        fsutil behavior query disablelastaccess
+        Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem |
+          Format-List LongPathsEnabled
+        Get-Volume | Format-Table -AutoSize DriveLetter, FileSystem, Size
+        Get-SmbShare | Format-Table -AutoSize Name, Path
+    - name: build with MSVC
+      shell: pwsh
+      continue-on-error: true
+      run: |
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        @(
+          "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
+          'cl /nologo /O2 /W3 probe\probe-3707.c /Fe:probe-msvc.exe',
+          'echo probe-msvc build: exit %ERRORLEVEL%',
+          'cl /nologo /W3 probe\linkcheck.c ntdll.lib /Fe:linkcheck-msvc.exe || exit /b 1',
+          'linkcheck-msvc.exe'
+        ) | Set-Content -Encoding ascii build-msvc.bat
+        cmd /c build-msvc.bat
+        exit $LASTEXITCODE
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: build with the Git for Windows SDK's GCC
+      shell: bash
+      run: |
+        . /etc/profile &&
+        gcc --version | head -n 1 &&
+        gcc -O2 -Wall -municode -o probe-gcc.exe probe/probe-3707.c &&
+        gcc -O2 -Wall -o linkcheck-gcc.exe probe/linkcheck.c -lntdll &&
+        ./linkcheck-gcc.exe
+    - name: create FAT32, exFAT and ReFS volumes
+      shell: pwsh
+      continue-on-error: true
+      run: |
+        foreach ($v in @(@('fat32', 'F', 512), @('exfat', 'G', 512), @('refs', 'H', 4096))) {
+          $fs, $letter, $mb = $v
+          $vhd = "$env:RUNNER_TEMP\$fs.vhdx"
+          @("create vdisk file=`"$vhd`" maximum=$mb type=expandable",
+            "select vdisk file=`"$vhd`"",
+            "attach vdisk",
+            "create partition primary",
+            "format fs=$fs quick label=P3707",
+            "assign letter=$letter") |
+            Set-Content -Encoding ascii "$env:RUNNER_TEMP\dp-$fs.txt"
+          diskpart /s "$env:RUNNER_TEMP\dp-$fs.txt" | Select-Object -Last 2
+        }
+        Get-Volume | Format-Table -AutoSize DriveLetter, FileSystem, Size
+    - name: parity (GetFileAttributesExW vs NtQueryFullAttributesFile)
+      shell: pwsh
+      run: |
+        foreach ($exe in 'gcc', 'msvc') {
+          if (!(Test-Path ".\probe-$exe.exe")) { "SKIP probe-$exe (not built)"; continue }
+          $d = "$env:RUNNER_TEMP\parity-$exe"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          "== probe-$exe"
+          & ".\probe-$exe.exe" parity $d
+        }
+    - name: ChangeTime from the three sources, per volume
+      shell: pwsh
+      run: |
+        $t = $env:RUNNER_TEMP
+        New-Item -ItemType Directory -Force "$t\ntfs", "$t\smb" | Out-Null
+        $smb = '\\localhost\' + $t.Substring(0, 1) + '$' + $t.Substring(2) + '\smb'
+        foreach ($d in @("$t\ntfs", 'C:\', 'F:\', 'G:\', 'H:\', $smb)) {
+          if (Test-Path $d) { .\probe-gcc.exe scenario $d } else { "SKIP $d (absent)" }
+        }
+    - name: cost per call
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\perf" | Out-Null
+        .\probe-gcc.exe perf "$env:RUNNER_TEMP\perf"
+    - name: reproduce with the installed Git for Windows
+      shell: pwsh
+      run: |
+        powershell -ExecutionPolicy Bypass -File probe\repro-3707.ps1 -Git "$env:ProgramFiles\Git\cmd\git.exe"
