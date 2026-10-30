@@ -147,8 +147,12 @@ static void q_nt(const wchar_t *p, struct res *r)
 
 	memset(r, 0, sizeof(*r));
 	st = pRtlDosPathNameToNtPathName_U_WithStatus(p, &name, NULL, NULL);
-	if (!NT_SUCCESS(st))
-		goto fail;
+	if (!NT_SUCCESS(st)) {
+		/* like GetFileAttributesExW() */
+		r->st = st;
+		r->err = ERROR_PATH_NOT_FOUND;
+		return;
+	}
 	memset(&oa, 0, sizeof(oa));
 	oa.Length = sizeof(oa);
 	oa.ObjectName = &name;
@@ -175,8 +179,12 @@ static void q_ntrel(const wchar_t *p, struct res *r)
 	memset(r, 0, sizeof(*r));
 	st = pRtlDosPathNameToRelativeNtPathName_U_WithStatus(p, &name, NULL,
 							      &rel);
-	if (!NT_SUCCESS(st))
-		goto fail;
+	if (!NT_SUCCESS(st)) {
+		/* like GetFileAttributesExW() */
+		r->st = st;
+		r->err = ERROR_PATH_NOT_FOUND;
+		return;
+	}
 	memset(&oa, 0, sizeof(oa));
 	oa.Length = sizeof(oa);
 	oa.Attributes = P_OBJ_CASE_INSENSITIVE;
@@ -502,17 +510,32 @@ static const char *eq3(LONGLONG a, LONGLONG b, LONGLONG c)
 	return a == b && b == c ? "same" : "DIFF";
 }
 
+/* proposed st_ctim: the latest of CreationTime, LastWriteTime, ChangeTime */
+static LONGLONG latest(const struct res *r)
+{
+	LONGLONG t = r->chtime;
+
+	if (r->ctime > t)
+		t = r->ctime;
+	if (r->wtime > t)
+		t = r->wtime;
+	return t;
+}
+
 static void show(const char *step, const struct snap *s,
 		 const struct snap *prev)
 {
-	printf("  %-22s Ch[dir,path,hnd]=%s W=%s C=%s size=%s",
+	printf("  %-22s latest=%s Ch[dir,path,hnd]=%s W=%s C=%s size=%s",
 	       step,
+	       eq3(latest(&s->dir), latest(&s->path), latest(&s->hnd)),
 	       eq3(s->dir.chtime, s->path.chtime, s->hnd.chtime),
 	       eq3(s->dir.wtime, s->path.wtime, s->hnd.wtime),
 	       eq3(s->dir.ctime, s->path.ctime, s->hnd.ctime),
 	       eq3(s->dir.size, s->path.size, s->hnd.size));
 	if (prev)
-		printf(" | vs prev: Ch %s, W %s, C %s",
+		printf(" | vs prev: latest %s, Ch %s, W %s, C %s",
+		       latest(&s->path) == latest(&prev->path) ?
+		       "kept" : "MOVED",
 		       s->path.chtime == prev->path.chtime ? "kept" : "MOVED",
 		       s->path.wtime == prev->path.wtime ? "kept" : "MOVED",
 		       s->path.ctime == prev->path.ctime ? "kept" : "MOVED");
