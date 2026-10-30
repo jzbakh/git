@@ -48,7 +48,10 @@ jobs:
       shell: pwsh
       continue-on-error: true
       run: |
-        foreach ($v in @(@('fat32', 'F', 512), @('exfat', 'G', 512), @('refs', 'H', 4096))) {
+        # NTFS volume N: is mounted after enabling LastAccessTime updates
+        fsutil behavior set disablelastaccess 0
+        fsutil behavior query disablelastaccess
+        foreach ($v in @(@('fat32', 'F', 512), @('exfat', 'G', 512), @('refs', 'H', 4096), @('ntfs', 'N', 512))) {
           $fs, $letter, $mb = $v
           $vhd = "$env:RUNNER_TEMP\$fs.vhdx"
           @("create vdisk file=`"$vhd`" maximum=$mb type=expandable",
@@ -77,7 +80,7 @@ jobs:
         $t = $env:RUNNER_TEMP
         New-Item -ItemType Directory -Force "$t\ntfs", "$t\smb" | Out-Null
         $smb = '\\localhost\' + $t.Substring(0, 1) + '$' + $t.Substring(2) + '\smb'
-        foreach ($d in @("$t\ntfs", 'C:\', 'F:\', 'G:\', 'H:\', $smb)) {
+        foreach ($d in @("$t\ntfs", 'C:\', 'F:\', 'G:\', 'H:\', 'N:\', $smb)) {
           if (Test-Path $d) { .\probe-gcc.exe scenario $d } else { "SKIP $d (absent)" }
         }
     - name: cost per call

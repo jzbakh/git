@@ -603,6 +603,41 @@ static int cmd_scenario(const wchar_t *arg)
 	       "kept" : "MOVED");
 	prev = s;
 
+	/*
+	 * NTFS updates LastAccessTime at most once an hour: age it first,
+	 * so that the next read updates it (if updates are enabled).
+	 */
+	pause_ms();
+	{
+		ULARGE_INTEGER t;
+		FILETIME a;
+
+		GetSystemTimeAsFileTime(&a);
+		t.LowPart = a.dwLowDateTime;
+		t.HighPart = a.dwHighDateTime;
+		t.QuadPart -= 3ULL * 3600 * 10000000;
+		a.dwLowDateTime = t.LowPart;
+		a.dwHighDateTime = t.HighPart;
+		h = CreateFileW(f, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ |
+				FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+				OPEN_EXISTING, 0, NULL);
+		SetFileTime(h, NULL, &a, NULL);
+		CloseHandle(h);
+	}
+	take(dir, L"a.txt", &s);
+	show("age atime by 3h", &s, &prev);
+	prev = s;
+	pause_ms();
+	h = CreateFileW(f, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+			0, NULL);
+	ReadFile(h, rd, sizeof(rd), &n, NULL);
+	CloseHandle(h);
+	take(dir, L"a.txt", &s);
+	show("read after aging", &s, &prev);
+	printf("    atime %s\n", s.path.atime == prev.path.atime ?
+	       "kept" : "MOVED");
+	prev = s;
+
 	pause_ms();
 	SetFileAttributesW(f, FILE_ATTRIBUTE_NORMAL); /* clears archive */
 	take(dir, L"a.txt", &s);
