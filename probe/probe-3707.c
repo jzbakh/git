@@ -121,6 +121,8 @@ static void q_gfaex(const wchar_t *p, struct res *r)
 	r->attr = d.dwFileAttributes;
 	r->ctime = ((LONGLONG)d.ftCreationTime.dwHighDateTime << 32) |
 		d.ftCreationTime.dwLowDateTime;
+	r->atime = ((LONGLONG)d.ftLastAccessTime.dwHighDateTime << 32) |
+		d.ftLastAccessTime.dwLowDateTime;
 	r->wtime = ((LONGLONG)d.ftLastWriteTime.dwHighDateTime << 32) |
 		d.ftLastWriteTime.dwLowDateTime;
 	r->size = ((LONGLONG)d.nFileSizeHigh << 32) | d.nFileSizeLow;
@@ -346,12 +348,12 @@ static void print_res(const char *tag, const struct res *r)
 		printf("    %-5s ERR err=%lu st=0x%08lx\n", tag,
 		       (unsigned long)r->err, (unsigned long)r->st);
 	else
-		printf("    %-5s OK  attr=0x%05lx C=%lld W=%lld Ch=%lld size=%lld\n",
-		       tag, (unsigned long)r->attr, r->ctime, r->wtime,
-		       r->chtime, r->size);
+		printf("    %-5s OK  attr=0x%05lx C=%lld A=%lld W=%lld Ch=%lld size=%lld\n",
+		       tag, (unsigned long)r->attr, r->ctime, r->atime,
+		       r->wtime, r->chtime, r->size);
 }
 
-/* Compare what mingw_lstat() uses: success, error, attr, C, W, size. */
+/* Compare what mingw_lstat() uses: success, error, attr, times, size. */
 static int same_as_gfaex(const struct res *a, const struct res *b)
 {
 	if (a->ok != b->ok)
@@ -359,7 +361,8 @@ static int same_as_gfaex(const struct res *a, const struct res *b)
 	if (!a->ok)
 		return a->err == b->err;
 	return a->attr == b->attr && a->ctime == b->ctime &&
-		a->wtime == b->wtime && a->size == b->size;
+		a->atime == b->atime && a->wtime == b->wtime &&
+		a->size == b->size;
 }
 
 /* ---------------------------------------------------------------- parity */
