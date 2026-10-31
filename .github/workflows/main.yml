@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   phcm:
-    name: default placeholder mode per program, ${{ matrix.os }}
+    name: default placeholder mode and inheritance, ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -12,117 +12,85 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v7
-    - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: build and run under several names
-      shell: bash
-      run: |
-        . /etc/profile
-        gcc -O2 -Wall -o phcm.exe probe/phcm.c
-        mkdir -p names
-        for n in git.exe python.exe pwsh.exe powershell.exe cmd.exe explorer.exe code.exe bash.exe phcm.exe
-        do
-          cp phcm.exe "names/$n" && "./names/$n"
-        done
-
-  cloudfiles:
-    name: cloud files, rule ${{ matrix.rule }}
-    strategy:
-      fail-fast: false
-      matrix:
-        rule: [B, Bx2]
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v7
-    - name: python
-      shell: pwsh
-      run: |
-        $exe = python -c "import sys; print(sys.executable)"
-        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: build cfprobe with MSVC
+    - name: build with MSVC, copy under several names
       shell: pwsh
       run: |
         $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
-          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1') |
-          Set-Content -Encoding ascii build-cf.bat
-        cmd /c build-cf.bat
-        exit $LASTEXITCODE
-    - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: apply rule ${{ matrix.rule }}
+          'cl /nologo /W3 probe\phcm.c /Fe:phcm.exe || exit /b 1') |
+          Set-Content -Encoding ascii build.bat
+        cmd /c build.bat
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        New-Item -ItemType Directory names | Out-Null
+        foreach ($n in 'git.exe', 'python.exe', 'pwsh.exe', 'powershell.exe',
+                       'cmd.exe', 'explorer.exe', 'code.exe', 'bash.exe',
+                       'OneDrive.exe', 'phcm.exe') {
+          Copy-Item phcm.exe "names\$n"
+        }
+    - name: from cmd
+      shell: cmd
+      run: |
+        for %%n in (names\*.exe) do %%n
+        names\git.exe child 0
+        names\git.exe child 1
+        names\git.exe child 2
+    - name: from Windows PowerShell 5.1
+      shell: powershell
+      run: |
+        Get-ChildItem names\*.exe | ForEach-Object { & $_.FullName }
+        foreach ($m in 0, 1, 2) { & .\names\git.exe child $m }
+    - name: from PowerShell 7
+      shell: pwsh
+      run: |
+        Get-ChildItem names\*.exe | ForEach-Object { & $_.FullName }
+        foreach ($m in 0, 1, 2) { & .\names\git.exe child $m }
+    - name: from Git Bash
       shell: bash
       run: |
-        case "${{ matrix.rule }}" in
-        B) git apply probe/rule-b.patch;;
-        Bx2) git apply probe/rule-bx2.patch;;
-        esac && git diff --stat
-    - name: build
-      shell: bash
-      env:
-        HOME: ${{ runner.workspace }}
-      run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: OneDrive-like placeholders
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/cloudfiles.sh
+        for n in names/*.exe; do "./$n"; done
+        for m in 0 1 2; do ./names/git.exe child $m; done
 
-  checks:
-    name: rule Bx2, file systems, interop, tests
+  attrs:
+    name: attributes per API and placeholder mode
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
-    - name: install pygit2
+    - name: build with MSVC
       shell: pwsh
       run: |
-        python -m pip install --quiet pygit2
-        $exe = python -c "import sys; print(sys.executable)"
-        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: volumes, WinFsp memfs, rclone
-      shell: pwsh
-      run: ./probe/mount.ps1
-    - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: apply rule Bx2
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
+          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1',
+          'cl /nologo /W3 probe\phattr.c /Fe:phattr.exe || exit /b 1') |
+          Set-Content -Encoding ascii build.bat
+        cmd /c build.bat
+        exit $LASTEXITCODE
+    - name: regular file, synced placeholder, freed placeholder
       shell: bash
-      run: git apply probe/rule-bx2.patch && git diff --stat
-    - name: build
-      shell: bash
-      env:
-        HOME: ${{ runner.workspace }}
-      run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: per file system, Git 2.56 then this Git
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
       run: |
-        . /etc/profile
-        t=$(cygpath -u "$RUNNER_TEMP")
-        smb="//localhost/${RUNNER_TEMP:0:1}\$${t#/?}/smb"
-        set -- "C:=/c/fsc" "D:=$t/fsc" "FAT32=/f" "exFAT=/g" "ReFS=/h" \
-          "NTFS-vhd=/n" "SMB=$smb" "memfs=/m" "rclone=/r"
-        sh probe/fscheck.sh "/c/Program Files/Git/cmd/git.exe" "$@"
-        sh probe/fscheck.sh "$(pwd)/bin-wrappers/git" "$@"
-    - name: worktree shared with Git 2.56 and libgit2
-      if: always()
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/interop.sh
-    - name: "issue repro on C:"
-      if: always()
-      shell: pwsh
-      run: powershell -ExecutionPolicy Bypass -File probe\repro-3707.ps1 -Git "$env:GITHUB_WORKSPACE\git.exe"
-    - name: stat-related tests
-      if: always()
-      shell: bash
-      env:
-        HOME: ${{ runner.workspace }}
-      run: |
-        . /etc/profile
-        cd t
-        for t in t0010-racy-git.sh t1701-racy-split-index.sh \
-          t2108-update-index-refresh-racy.sh \
-          t7063-status-untracked-cache.sh t7508-status.sh \
-          t7519-status-fsmonitor.sh
-        do
-          sh $t || exit 1
-        done
+        W=$(cygpath -u "$GITHUB_WORKSPACE")
+        waitfor () {
+          t=0
+          while [ $t -lt 90 ] && ! grep -q "^$1\$" /c/cfa.log 2>/dev/null
+          do
+            sleep 1
+            t=$((t + 1))
+          done
+        }
+        mkdir -p /c/plain /c/cfa
+        printf 'x\n' >/c/plain/f1
+        printf 'one\n' >/c/cfa/f1
+        printf 'two\n' >/c/cfa/f2
+        echo "regular file:"
+        "$W/phattr.exe" 'C:\plain' f1
+        "$W/cfprobe.exe" 'C:\cfa' 20 f1 f2 >/c/cfa.log 2>&1 &
+        waitfor READY1
+        echo "synced placeholder:"
+        "$W/phattr.exe" 'C:\cfa' f1
+        : >/c/cfa/go
+        waitfor READY2
+        echo "after Free up space:"
+        "$W/phattr.exe" 'C:\cfa' f1
+        wait || echo "cfprobe exited with $?"
+        echo "provider log:"
+        cat /c/cfa.log
