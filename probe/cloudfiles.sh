@@ -7,10 +7,15 @@ OLD="/c/Program Files/Git/cmd/git.exe"
 PY="$(cygpath -u "$PYEXE")"
 P="$(cygpath -u "$GITHUB_WORKSPACE")/probe"
 CFX="$(cygpath -u "$GITHUB_WORKSPACE")/cfprobe.exe"
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory \
+	GIT_CONFIG_VALUE_0='*' GIT_CONFIG_KEY_1=core.autocrlf \
+	GIT_CONFIG_VALUE_1=false
 files=
-for i in $(seq 0 19)
+i=0
+while [ $i -lt 20 ]
 do
 	files="$files repo\\f$(printf %04d $i)"
+	i=$((i + 1))
 done
 fetched () { grep -c '^FETCH_DATA' "$1" || :; }
 for which in OLD NEW
@@ -29,10 +34,11 @@ do
 	echo "== $which: $("$GITX" version)"
 	echo "$which: stat-dirty before: $("$GITX" -C repo diff-files --name-only | wc -l)"
 	"$CFX" "$(cygpath -w "$root")" 90 $files >"$root.log" 2>&1 &
-	for t in $(seq 1 60)
+	t=0
+	while [ $t -lt 60 ] && ! grep -q '^READY' "$root.log"
 	do
-		grep -q '^READY' "$root.log" && break
 		sleep 1
+		t=$((t + 1))
 	done
 	grep -v '^FETCH_DATA' "$root.log" | grep -E 'f000[01] |Cf|READY|cannot'
 	echo "$which: stat-dirty after dehydration: $("$GITX" -C repo diff-files --name-only | wc -l)"
