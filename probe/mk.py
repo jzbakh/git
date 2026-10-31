@@ -46,3 +46,24 @@ elif cmd == 'attr-toggle':		# flip the archive attribute
 	a = (k.GetFileAttributesW(p) & ~0x80) ^ 0x20
 	if not k.SetFileAttributesW(p, a or 0x80):
 		sys.exit('SetFileAttributesW failed')
+elif cmd == 'rewrite-older-ctime':	# as rewrite-keep-mtime, and C -= 1 day
+	import ctypes
+	from ctypes import wintypes
+	p = sys.argv[2]
+	st = os.stat(p)
+	with open(p, 'rb') as f:
+		data = f.read()
+	with open(p, 'r+b') as f:
+		f.write(bytes(b ^ 1 for b in data))
+	os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+	k = ctypes.windll.kernel32
+	k.CreateFileW.restype = wintypes.HANDLE
+	h = k.CreateFileW(p, 0x100, 7, None, 3, 0, None)
+	if h == wintypes.HANDLE(-1).value:
+		sys.exit('CreateFileW failed')
+	ft = ctypes.c_ulonglong(st.st_birthtime_ns // 100 +
+				116444736000000000 - 864000000000)
+	ok = k.SetFileTime(wintypes.HANDLE(h), ctypes.byref(ft), None, None)
+	k.CloseHandle(wintypes.HANDLE(h))
+	if not ok:
+		sys.exit('SetFileTime failed')

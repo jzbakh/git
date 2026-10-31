@@ -3,8 +3,8 @@ name: CI
 on: [push]
 
 jobs:
-  cloudfiles:
-    name: cloud files, rule ${{ matrix.rule }}
+  fscheck:
+    name: file systems, rule ${{ matrix.rule }}
     strategy:
       fail-fast: false
       matrix:
@@ -17,15 +17,9 @@ jobs:
       run: |
         $exe = python -c "import sys; print(sys.executable)"
         "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: build cfprobe with MSVC
+    - name: volumes, WinFsp memfs, rclone
       shell: pwsh
-      run: |
-        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
-          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1') |
-          Set-Content -Encoding ascii build-cf.bat
-        cmd /c build-cf.bat
-        exit $LASTEXITCODE
+      run: ./probe/mount.ps1
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
     - name: apply rule B
       if: matrix.rule == 'B'
@@ -36,8 +30,15 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: OneDrive-like placeholders
+    - name: per file system, Git 2.56 then this Git
       shell: bash
       env:
         HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/cloudfiles.sh
+      run: |
+        . /etc/profile
+        t=$(cygpath -u "$RUNNER_TEMP")
+        smb="//localhost/${RUNNER_TEMP:0:1}\$${t#/?}/smb"
+        set -- "C:=/c/fsc" "D:=$t/fsc" "FAT32=/f" "exFAT=/g" "ReFS=/h" \
+          "NTFS-vhd=/n" "SMB=$smb" "memfs=/m" "rclone=/r"
+        sh probe/fscheck.sh "/c/Program Files/Git/cmd/git.exe" "$@"
+        sh probe/fscheck.sh "$(pwd)/bin-wrappers/git" "$@"

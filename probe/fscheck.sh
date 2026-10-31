@@ -7,6 +7,9 @@ GITX="$1"
 shift
 P="$(cd "$(dirname "$0")" && pwd)"
 PY="$(cygpath -u "$PYEXE")"
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory \
+	GIT_CONFIG_VALUE_0='*' GIT_CONFIG_KEY_1=core.autocrlf \
+	GIT_CONFIG_VALUE_1=false
 dirty () { "$GITX" diff-files --name-only "$@" | wc -l; }
 st () { "$GITX" status --porcelain -- "$1" | tr '\n' ' '; }
 "$GITX" version
@@ -38,9 +41,11 @@ do
 		sleep 2 &&
 		"$PY" -I "$P/mk.py" rewrite-keep-mtime f0001 &&
 		"$PY" -I "$P/mk.py" recreate-keep-mtime f0003 &&
+		"$PY" -I "$P/mk.py" rewrite-older-ctime f0004 &&
 		d=$(st f0001) &&
 		e=$(st f0003) &&
-		printf '%-9s stable:%s/%s attr:%s rewrite:[%s] recreate:[%s]\n' \
-			"$name" "$a" "$b" "$c" "$d" "$e"
+		f=$(st f0004) &&
+		printf '%-9s stable:%s/%s attr:%s rewrite:[%s] recreate:[%s] older-C:[%s]\n' \
+			"$name" "$a" "$b" "$c" "$d" "$e" "$f"
 	) || printf '%-9s FAILED\n' "$name"
 done
