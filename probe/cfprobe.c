@@ -5,8 +5,9 @@
  *
  * usage: cfprobe ROOT SECONDS FILE...
  * FILEs are relative to ROOT. Their contents are kept in memory, they
- * become in-sync placeholders, are unpinned and dehydrated, "READY" is
- * printed, and hydration requests are served and logged for SECONDS.
+ * become in-sync placeholders ("READY1"); once ROOT\go exists, they are
+ * unpinned and dehydrated ("READY2"), like OneDrive's "Free up space".
+ * Hydration requests are served and logged until SECONDS have passed.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -186,7 +187,6 @@ int wmain(int argc, wchar_t **argv)
 
 	for (i = 0; i < nfiles; i++) {
 		HANDLE h;
-		LARGE_INTEGER zero, all;
 
 		swprintf(path, MAX_PATH, L"%ls\\%ls", argv[1], names[i]);
 		h = CreateFileW(path, FILE_READ_DATA | FILE_WRITE_DATA |
@@ -206,13 +206,38 @@ int wmain(int argc, wchar_t **argv)
 		if (FAILED(hr))
 			printf("  %-11ls CfConvertToPlaceholder: 0x%08lx\n",
 			       names[i], (unsigned long)hr);
+		CloseHandle(h);
 		show(i, path, "converted");
+	}
+	printf("READY1\n");
+	{
+		wchar_t go[MAX_PATH];
+		int t;
+
+		swprintf(go, MAX_PATH, L"%ls\\go", argv[1]);
+		for (t = 0; t < 600 && GetFileAttributesW(go) ==
+		     INVALID_FILE_ATTRIBUTES; t++)
+			Sleep(200);
+	}
+	for (i = 0; i < nfiles; i++) {
+		HANDLE h;
+		LARGE_INTEGER zero, all;
+
+		swprintf(path, MAX_PATH, L"%ls\\%ls", argv[1], names[i]);
+		h = CreateFileW(path, FILE_READ_DATA | FILE_WRITE_DATA |
+				FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+				FILE_SHARE_READ | FILE_SHARE_WRITE |
+				FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+		if (h == INVALID_HANDLE_VALUE) {
+			printf("cannot open %ls to free it: %lu\n", path,
+			       (unsigned long)GetLastError());
+			continue;
+		}
 		hr = CfSetPinState(h, CF_PIN_STATE_UNPINNED,
 				   CF_SET_PIN_FLAG_NONE, NULL);
 		if (FAILED(hr))
 			printf("  %-11ls CfSetPinState: 0x%08lx\n", names[i],
 			       (unsigned long)hr);
-		show(i, path, "unpinned");
 		zero.QuadPart = 0;
 		all.QuadPart = -1;
 		hr = CfDehydratePlaceholder(h, zero, all,
@@ -221,9 +246,9 @@ int wmain(int argc, wchar_t **argv)
 			printf("  %-11ls CfDehydratePlaceholder: 0x%08lx\n",
 			       names[i], (unsigned long)hr);
 		CloseHandle(h);
-		show(i, path, "dehydrated");
+		show(i, path, "freed");
 	}
-	printf("READY\n");
+	printf("READY2\n");
 	Sleep((DWORD)seconds * 1000);
 	CfDisconnectSyncRoot(key);
 	printf("DONE\n");

@@ -1,7 +1,8 @@
 #!/bin/sh
-# Git 2.56 and this Git, each on a repository inside its own Cloud Files
-# sync root: dehydrate the files like OneDrive's "Free up space", then
-# run "git status" twice and count the files the provider had to send.
+# OneDrive-like flow, per Git and FSCache setting, each in its own Cloud
+# Files sync root: the files become in-sync placeholders and Git records
+# them; then "Free up space" unpins and dehydrates them. Count the files
+# that "git status" makes the provider send.
 NEW="$(cygpath -u "$GITHUB_WORKSPACE")/bin-wrappers/git"
 OLD="/c/Program Files/Git/cmd/git.exe"
 PY="$(cygpath -u "$PYEXE")"
@@ -18,40 +19,58 @@ do
 	i=$((i + 1))
 done
 fetched () { grep -c '^FETCH_DATA' "$1" || :; }
-for which in OLD NEW
-do
-	eval "GITX=\"\$$which\""
-	root="/c/cf-$which"
-	rm -rf "$root" && mkdir -p "$root" && cd "$root" || exit 1
-	"$GITX" -c init.defaultBranch=main init -q repo
-	"$GITX" -C repo config core.fscache true
-	"$PY" -I "$P/mk.py" make repo 20
-	"$GITX" -C repo add . &&
-	"$GITX" -C repo -c user.name=t -c user.email=t@example.com \
-		commit -qm one
-	sleep 2
-	"$GITX" -C repo update-index -q --refresh
-	echo "== $which: $("$GITX" version)"
-	echo "$which: stat-dirty before: $("$GITX" -C repo diff-files --name-only | wc -l)"
-	"$CFX" "$(cygpath -w "$root")" 90 $files >"$root.log" 2>&1 &
+waitfor () {
 	t=0
-	while [ $t -lt 60 ] && ! grep -q '^READY' "$root.log"
+	while [ $t -lt 120 ] && ! grep -q "^$2\$" "$1" 2>/dev/null
 	do
 		sleep 1
 		t=$((t + 1))
 	done
-	grep -v '^FETCH_DATA' "$root.log" | grep -E 'f000[01] |Cf|READY|cannot'
-	echo "$which: stat-dirty after dehydration: $("$GITX" -C repo diff-files --name-only | wc -l)"
-	n0=$(fetched "$root.log")
-	echo "$which: status 1: [$("$GITX" -C repo status --porcelain | tr '\n' ' ')]"
-	n1=$(fetched "$root.log")
-	echo "$which: status 1 made the provider send $((n1 - n0)) of 20 files"
-	echo "$which: stat-dirty after status 1: $("$GITX" -C repo diff-files --name-only | wc -l)"
-	echo "$which: status 2: [$("$GITX" -C repo status --porcelain | tr '\n' ' ')]"
-	n2=$(fetched "$root.log")
-	echo "$which: status 2 made the provider send $((n2 - n1)) files"
-	echo "$which: stat-dirty after status 2: $("$GITX" -C repo diff-files --name-only | wc -l)"
-	grep -m 2 '^FETCH_DATA' "$root.log"
-	cd /
+}
+attrs () {
+	"$PY" -I -c 'import os, sys; print(hex(os.lstat(sys.argv[1]).st_file_attributes))' \
+		"$1/repo/f0000"
+}
+for which in OLD NEW
+do
+	eval "GITX=\"\$$which\""
+	for fscache in true false
+	do
+		tag="$which, core.fscache=$fscache"
+		root="/c/cf-$which-$fscache"
+		log="$root.log"
+		rm -rf "$root" && mkdir -p "$root" && cd "$root" || exit 1
+		g () { "$GITX" -C repo -c core.fscache=$fscache "$@"; }
+		dirty () { g diff-files --name-only | wc -l; }
+		"$GITX" -c init.defaultBranch=main init -q repo
+		"$PY" -I "$P/mk.py" make repo 20
+		g add . && g -c user.name=t -c user.email=t@example.com commit -qm one
+		sleep 2
+		g update-index -q --refresh
+		"$CFX" "$(cygpath -w "$root")" 60 $files >"$log" 2>&1 &
+		waitfor "$log" READY1
+		echo "== $tag: $("$GITX" version)"
+		echo "$tag: synced placeholder, attributes seen by a process: $(attrs "$root")"
+		echo "$tag: stat-dirty: $(dirty)"
+		n0=$(fetched "$log")
+		g status --porcelain >/dev/null
+		n1=$(fetched "$log")
+		echo "$tag: status sent $((n1 - n0)) files, then stat-dirty: $(dirty)"
+		g status --porcelain >/dev/null
+		sleep 2
+		: >"$root/go"
+		waitfor "$log" READY2
+		echo "$tag: after Free up space, attributes seen: $(attrs "$root")"
+		echo "$tag: stat-dirty: $(dirty)"
+		n2=$(fetched "$log")
+		echo "$tag: status 1: [$(g status --porcelain | tr '\n' ' ')]"
+		n3=$(fetched "$log")
+		echo "$tag: status 1 sent $((n3 - n2)) of 20 files, then stat-dirty: $(dirty)"
+		g status --porcelain >/dev/null
+		n4=$(fetched "$log")
+		echo "$tag: status 2 sent $((n4 - n3)) files, then stat-dirty: $(dirty)"
+		grep -E '^Cf|cannot' "$log"
+		cd /
+	done
 done
 wait
