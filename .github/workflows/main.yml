@@ -3,12 +3,33 @@ name: CI
 on: [push]
 
 jobs:
+  phcm:
+    name: default placeholder mode per program, ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: build and run under several names
+      shell: bash
+      run: |
+        . /etc/profile
+        gcc -O2 -Wall -o phcm.exe probe/phcm.c
+        mkdir -p names
+        for n in git.exe python.exe pwsh.exe powershell.exe cmd.exe explorer.exe code.exe bash.exe phcm.exe
+        do
+          cp phcm.exe "names/$n" && "./names/$n"
+        done
+
   cloudfiles:
     name: cloud files, rule ${{ matrix.rule }}
     strategy:
       fail-fast: false
       matrix:
-        rule: [B, Bx]
+        rule: [B, Bx2]
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
@@ -32,7 +53,7 @@ jobs:
       run: |
         case "${{ matrix.rule }}" in
         B) git apply probe/rule-b.patch;;
-        Bx) git apply probe/rule-bx.patch;;
+        Bx2) git apply probe/rule-bx2.patch;;
         esac && git diff --stat
     - name: build
       shell: bash
@@ -46,7 +67,7 @@ jobs:
       run: . /etc/profile && sh probe/cloudfiles.sh
 
   checks:
-    name: rule Bx, file systems, interop, tests
+    name: rule Bx2, file systems, interop, tests
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
@@ -60,9 +81,9 @@ jobs:
       shell: pwsh
       run: ./probe/mount.ps1
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: apply rule Bx
+    - name: apply rule Bx2
       shell: bash
-      run: git apply probe/rule-bx.patch && git diff --stat
+      run: git apply probe/rule-bx2.patch && git diff --stat
     - name: build
       shell: bash
       env:

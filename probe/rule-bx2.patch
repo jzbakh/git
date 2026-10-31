@@ -1,0 +1,119 @@
+diff --git a/compat/mingw-posix.h b/compat/mingw-posix.h
+index 804071a5..4deeff95 100644
+--- a/compat/mingw-posix.h
++++ b/compat/mingw-posix.h
+@@ -375,22 +375,28 @@ static inline void filetime_to_timespec(const FILETIME *ft, struct timespec *ts)
+ }
+ 
+ /*
+- * st_ctim: the latest of ChangeTime, CreationTime and LastWriteTime.
+- * FAT and exFAT lack ChangeTime (it reads as 0, 1980-01-01 or LastWriteTime
+- * depending on the API), but the latest of the three is consistent.
++ * st_ctim: ChangeTime if it is later than both CreationTime and
++ * LastWriteTime, CreationTime otherwise. Always CreationTime for reparse
++ * points and cloud file placeholders, whose ChangeTime moves when they
++ * are converted, pinned, unpinned or dehydrated.
+  */
+ static inline void filetimes_to_ctim(const LARGE_INTEGER *change,
+ 				     const LARGE_INTEGER *creation,
+ 				     const LARGE_INTEGER *last_write,
+-				     struct timespec *ts)
++				     DWORD attributes, struct timespec *ts)
+ {
+-	const LARGE_INTEGER *latest = change;
+-
+-	if (creation->QuadPart > latest->QuadPart)
+-		latest = creation;
+-	if (last_write->QuadPart > latest->QuadPart)
+-		latest = last_write;
+-	filetime_to_timespec((const FILETIME *)latest, ts);
++	const LARGE_INTEGER *t = creation;
++
++	if (!(attributes & (FILE_ATTRIBUTE_REPARSE_POINT |
++			    FILE_ATTRIBUTE_OFFLINE |
++			    FILE_ATTRIBUTE_RECALL_ON_OPEN |
++			    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS |
++			    FILE_ATTRIBUTE_PINNED |
++			    FILE_ATTRIBUTE_UNPINNED)) &&
++	    change->QuadPart > creation->QuadPart &&
++	    change->QuadPart > last_write->QuadPart)
++		t = change;
++	filetime_to_timespec((const FILETIME *)t, ts);
+ }
+ 
+ struct mingw_stat {
+diff --git a/compat/mingw.c b/compat/mingw.c
+index 3716e334..3f1e4207 100644
+--- a/compat/mingw.c
++++ b/compat/mingw.c
+@@ -1430,7 +1430,8 @@ int mingw_lstat(const char *file_name, struct stat *buf)
+ 		filetime_to_timespec((FILETIME *)&(fdata.LastWriteTime),
+ 				     &(buf->st_mtim));
+ 		filetimes_to_ctim(&(fdata.ChangeTime), &(fdata.CreationTime),
+-				  &(fdata.LastWriteTime), &(buf->st_ctim));
++				  &(fdata.LastWriteTime), fdata.FileAttributes,
++				  &(buf->st_ctim));
+ 		if (S_ISREG(buf->st_mode) &&
+ 		    are_wsl_compatible_mode_bits_enabled()) {
+ 			copy_wsl_mode_bits_from_disk(wfilename, -1,
+@@ -1492,7 +1493,8 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
+ 	filetime_to_timespec((FILETIME *)&(basic.LastWriteTime),
+ 			     &(buf->st_mtim));
+ 	filetimes_to_ctim(&(basic.ChangeTime), &(basic.CreationTime),
+-			  &(basic.LastWriteTime), &(buf->st_ctim));
++			  &(basic.LastWriteTime), basic.FileAttributes,
++			  &(buf->st_ctim));
+ 	if (are_wsl_compatible_mode_bits_enabled())
+ 	    get_wsl_mode_bits_by_handle(hnd, &buf->st_mode);
+ 	return 0;
+@@ -4457,6 +4459,28 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
+  * To be more compatible with the core git code, we convert
+  * argv into UTF8 and pass them directly to main().
+  */
++/*
++ * Let lstat() see cloud file placeholders (OneDrive and others) as they
++ * are, as the FSCache does, so that both report the same attributes to
++ * filetimes_to_ctim().
++ */
++static void expose_placeholders(void)
++{
++	DECLARE_PROC_ADDR(ntdll.dll, CHAR, NTAPI,
++			  RtlQueryProcessPlaceholderCompatibilityMode, void);
++	DECLARE_PROC_ADDR(ntdll.dll, CHAR, NTAPI,
++			  RtlSetProcessPlaceholderCompatibilityMode, CHAR);
++	CHAR mode;
++
++	if (!INIT_PROC_ADDR(RtlQueryProcessPlaceholderCompatibilityMode) ||
++	    !INIT_PROC_ADDR(RtlSetProcessPlaceholderCompatibilityMode))
++		return;
++	/* 0: application default, 1: disguise, 2: expose */
++	mode = RtlQueryProcessPlaceholderCompatibilityMode();
++	if (mode == 0 || mode == 1)
++		RtlSetProcessPlaceholderCompatibilityMode(2);
++}
++
+ int wmain(int argc, const wchar_t **wargv)
+ {
+ 	int i, exit_status;
+@@ -4480,6 +4504,7 @@ int wmain(int argc, const wchar_t **wargv)
+ 
+ 	maybe_redirect_std_handles();
+ 	adjust_symlink_flags();
++	expose_placeholders();
+ 	fsync_object_files = 1;
+ 
+ 	/* determine size of argv and environ conversion buffer */
+diff --git a/compat/win32/fscache.c b/compat/win32/fscache.c
+index a0dd81b2..2bc6cea8 100644
+--- a/compat/win32/fscache.c
++++ b/compat/win32/fscache.c
+@@ -242,7 +242,8 @@ static struct fsentry *fseentry_create_entry(struct fscache *cache,
+ 	filetime_to_timespec((FILETIME *)&(fdata->LastWriteTime),
+ 			     &(fse->u.s.st_mtim));
+ 	filetimes_to_ctim(&(fdata->ChangeTime), &(fdata->CreationTime),
+-			  &(fdata->LastWriteTime), &(fse->u.s.st_ctim));
++			  &(fdata->LastWriteTime), fdata->FileAttributes,
++			  &(fse->u.s.st_ctim));
+ 	if (fdata->EaSize > 0 &&
+ 	    sizeof(buf) >= (size_t)(list ? list->len+1 : 0) + fse->len+1 &&
+ 	    are_wsl_compatible_mode_bits_enabled()) {
