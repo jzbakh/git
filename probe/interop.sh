@@ -50,23 +50,30 @@ report "A: core.trustctime=false; stat-dirty for new Git" "$(dirty "$NEW" a)"
 report "A: core.trustctime=false; stat-dirty for old Git" "$(dirty "$OLD" a)"
 report "A: core.trustctime=false; libgit2 status" "$("$PY" -I "$P/lg2.py" status a)"
 
-# B: fresh clone by new Git; C: then a branch switch rewriting half
-"$NEW" -c init.defaultBranch=main init -q src
-"$PY" -I "$P/mk.py" make src 3000
-"$NEW" -C src add . && "$NEW" -C src $G commit -qm one
-"$NEW" -C src switch -qc other
-"$PY" -I "$P/mk.py" half src 3000
-"$NEW" -C src $G commit -qam two
-"$NEW" -C src switch -q main
-"$NEW" clone -q --no-local src b
-"$NEW" clone -q --no-local src b2
-sleep 2
-report "B: fresh clone; re-hashed by libgit2" "$(lg2 b2)"
-report "B: fresh clone, entries" "$("$NEW" -C b ls-files | wc -l)"
-report "B: index by new Git; stat-dirty for new Git" "$(dirty "$NEW" b)"
-report "B: index by new Git; stat-dirty for old Git" "$(dirty "$OLD" b)"
-"$NEW" -C b switch -q other
-sleep 2
-report "C: after switch (1500 files rewritten); new Git" "$(dirty "$NEW" b)"
-report "C: after switch; stat-dirty for old Git" "$(dirty "$OLD" b)"
-report "C: after switch; re-hashed by libgit2" "$(lg2 b)"
+# B: fresh clone by new Git; C: then a branch switch rewriting half.
+# Run on D: (runner temp) and C: (system drive).
+bc () {
+	mkdir -p "$1" && cd "$1"
+	"$NEW" -c init.defaultBranch=main init -q src
+	"$PY" -I "$P/mk.py" make src 3000
+	"$NEW" -C src add . && "$NEW" -C src $G commit -qm one
+	"$NEW" -C src switch -qc other
+	"$PY" -I "$P/mk.py" half src 3000
+	"$NEW" -C src $G commit -qam two
+	"$NEW" -C src switch -q main
+	"$NEW" clone -q --no-local src b
+	"$NEW" clone -q --no-local src b2
+	sleep 2
+	report "$2 B: fresh clone; re-hashed by libgit2" "$(lg2 b2)"
+	report "$2 B: fresh clone, entries" "$("$NEW" -C b ls-files | wc -l)"
+	report "$2 B: index by new Git; stat-dirty for new Git" "$(dirty "$NEW" b)"
+	report "$2 B: index by new Git; stat-dirty for old Git" "$(dirty "$OLD" b)"
+	"$NEW" -C b switch -q other
+	sleep 2
+	report "$2 C: after switch (1500 files rewritten); new Git" "$(dirty "$NEW" b)"
+	report "$2 C: after switch; stat-dirty for old Git" "$(dirty "$OLD" b)"
+	report "$2 C: after switch; re-hashed by libgit2" "$(lg2 b)"
+	cd - >/dev/null
+}
+bc "$(cygpath -u "$RUNNER_TEMP")/bc" "D:"
+bc /c/interop-bc "C:"
