@@ -27,7 +27,6 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: |
-        . /etc/profile
         case "$MSYSTEM" in CLANG*) CC=clang;; *) CC=gcc;; esac
         echo "MSYSTEM=$MSYSTEM CC=$CC"
         $CC --version | head -n 1
@@ -35,8 +34,7 @@ jobs:
     - name: imports of git.exe
       shell: bash
       run: |
-        . /etc/profile
-        objdump -p git.exe |
+        (objdump -p git.exe || llvm-objdump -p git.exe) |
         grep -E "DLL Name|NtQueryFullAttributesFile|RtlDosPathNameToNtPathName_U_WithStatus|GetFileInformationByHandleEx"
         ./git.exe version --build-options
     - name: stat-related tests
@@ -44,7 +42,6 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: |
-        . /etc/profile
         cd t
         for t in t0010-racy-git.sh t1701-racy-split-index.sh \
           t2108-update-index-refresh-racy.sh \
@@ -59,7 +56,6 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: |
-        . /etc/profile
         case "$MSYSTEM" in CLANG*) CC=clang;; *) CC=gcc;; esac
         rm -f compat/mingw.o compat/win32/fscache.o
         make CC=$CC NO_RUST=1 NO_PERL=1 DEVELOPER=1 \
