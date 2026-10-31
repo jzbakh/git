@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rule: [B, Bp]
+        rule: [B, Bx]
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
@@ -32,7 +32,7 @@ jobs:
       run: |
         case "${{ matrix.rule }}" in
         B) git apply probe/rule-b.patch;;
-        Bp) git apply probe/rule-bp.patch;;
+        Bx) git apply probe/rule-bx.patch;;
         esac && git diff --stat
     - name: build
       shell: bash
@@ -44,7 +44,64 @@ jobs:
       env:
         HOME: ${{ runner.temp }}
       run: . /etc/profile && sh probe/cloudfiles.sh
-    - name: provider logs
+
+  checks:
+    name: rule Bx, file systems, interop, tests
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: install pygit2
+      shell: pwsh
+      run: |
+        python -m pip install --quiet pygit2
+        $exe = python -c "import sys; print(sys.executable)"
+        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    - name: volumes, WinFsp memfs, rclone
+      shell: pwsh
+      run: ./probe/mount.ps1
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: apply rule Bx
+      shell: bash
+      run: git apply probe/rule-bx.patch && git diff --stat
+    - name: build
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
+    - name: per file system, Git 2.56 then this Git
+      shell: bash
+      env:
+        HOME: ${{ runner.temp }}
+      run: |
+        . /etc/profile
+        t=$(cygpath -u "$RUNNER_TEMP")
+        smb="//localhost/${RUNNER_TEMP:0:1}\$${t#/?}/smb"
+        set -- "C:=/c/fsc" "D:=$t/fsc" "FAT32=/f" "exFAT=/g" "ReFS=/h" \
+          "NTFS-vhd=/n" "SMB=$smb" "memfs=/m" "rclone=/r"
+        sh probe/fscheck.sh "/c/Program Files/Git/cmd/git.exe" "$@"
+        sh probe/fscheck.sh "$(pwd)/bin-wrappers/git" "$@"
+    - name: worktree shared with Git 2.56 and libgit2
       if: always()
       shell: bash
-      run: for f in /c/cf-*.log; do echo "== $f"; grep -v "^  repo.f00[1-9]" "$f"; done
+      env:
+        HOME: ${{ runner.temp }}
+      run: . /etc/profile && sh probe/interop.sh
+    - name: "issue repro on C:"
+      if: always()
+      shell: pwsh
+      run: powershell -ExecutionPolicy Bypass -File probe\repro-3707.ps1 -Git "$env:GITHUB_WORKSPACE\git.exe"
+    - name: stat-related tests
+      if: always()
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: |
+        . /etc/profile
+        cd t
+        for t in t0010-racy-git.sh t1701-racy-split-index.sh \
+          t2108-update-index-refresh-racy.sh \
+          t7063-status-untracked-cache.sh t7508-status.sh \
+          t7519-status-fsmonitor.sh
+        do
+          sh $t || exit 1
+        done
