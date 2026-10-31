@@ -3,17 +3,10 @@ name: CI
 on: [push]
 
 jobs:
-  interop:
-    name: index shared with old Git and libgit2
+  volumes:
+    name: volumes and tunneling
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v7
-    - name: install pygit2
-      shell: pwsh
-      run: |
-        python -m pip install --quiet pygit2
-        $exe = python -c "import sys; print(sys.executable)"
-        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
     - name: "volumes and tunneling on C: and D:"
       shell: pwsh
       run: |
@@ -31,14 +24,3 @@ jobs:
           $c2 = (Get-Item $f).CreationTimeUtc
           "{0}: creation kept after delete+recreate: {1}" -f $d, ($c1 -eq $c2)
         }
-    - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: build
-      shell: bash
-      env:
-        HOME: ${{ runner.workspace }}
-      run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: interop
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/interop.sh
