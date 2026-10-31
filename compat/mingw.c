@@ -1430,7 +1430,8 @@ int mingw_lstat(const char *file_name, struct stat *buf)
 		filetime_to_timespec((FILETIME *)&(fdata.LastWriteTime),
 				     &(buf->st_mtim));
 		filetimes_to_ctim(&(fdata.ChangeTime), &(fdata.CreationTime),
-				  &(fdata.LastWriteTime), &(buf->st_ctim));
+				  &(fdata.LastWriteTime), fdata.FileAttributes,
+				  &(buf->st_ctim));
 		if (S_ISREG(buf->st_mode) &&
 		    are_wsl_compatible_mode_bits_enabled()) {
 			copy_wsl_mode_bits_from_disk(wfilename, -1,
@@ -1492,7 +1493,8 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
 	filetime_to_timespec((FILETIME *)&(basic.LastWriteTime),
 			     &(buf->st_mtim));
 	filetimes_to_ctim(&(basic.ChangeTime), &(basic.CreationTime),
-			  &(basic.LastWriteTime), &(buf->st_ctim));
+			  &(basic.LastWriteTime), basic.FileAttributes,
+			  &(buf->st_ctim));
 	if (are_wsl_compatible_mode_bits_enabled())
 	    get_wsl_mode_bits_by_handle(hnd, &buf->st_mode);
 	return 0;
@@ -4457,6 +4459,28 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  * To be more compatible with the core git code, we convert
  * argv into UTF8 and pass them directly to main().
  */
+/*
+ * Let lstat() see cloud file placeholders (OneDrive and others) as they
+ * are, as the FSCache does, so that both report the same attributes to
+ * filetimes_to_ctim().
+ */
+static void expose_placeholders(void)
+{
+	DECLARE_PROC_ADDR(ntdll.dll, CHAR, NTAPI,
+			  RtlQueryProcessPlaceholderCompatibilityMode, void);
+	DECLARE_PROC_ADDR(ntdll.dll, CHAR, NTAPI,
+			  RtlSetProcessPlaceholderCompatibilityMode, CHAR);
+	CHAR mode;
+
+	if (!INIT_PROC_ADDR(RtlQueryProcessPlaceholderCompatibilityMode) ||
+	    !INIT_PROC_ADDR(RtlSetProcessPlaceholderCompatibilityMode))
+		return;
+	/* 0: application default, 1: disguise, 2: expose */
+	mode = RtlQueryProcessPlaceholderCompatibilityMode();
+	if (mode == 0 || mode == 1)
+		RtlSetProcessPlaceholderCompatibilityMode(2);
+}
+
 int wmain(int argc, const wchar_t **wargv)
 {
 	int i, exit_status;
@@ -4480,6 +4504,7 @@ int wmain(int argc, const wchar_t **wargv)
 
 	maybe_redirect_std_handles();
 	adjust_symlink_flags();
+	expose_placeholders();
 	fsync_object_files = 1;
 
 	/* determine size of argv and environ conversion buffer */
