@@ -4,6 +4,7 @@
  * the times and attributes Git reads, and does Git then download files?
  *
  * usage: cfprobe ROOT SECONDS FILE...
+ *        cfprobe ROOT SECONDS -n COUNT   (FILEs repo\f0000 and up)
  * FILEs are relative to ROOT. Their contents are kept in memory, they
  * become in-sync placeholders ("READY1"); once ROOT\go exists, they are
  * unpinned and dehydrated ("READY2"), like OneDrive's "Free up space".
@@ -20,7 +21,7 @@
 
 #pragma comment(lib, "cldapi.lib")
 
-#define MAXF 64
+#define MAXF 4096
 
 static int nfiles;
 static wchar_t *names[MAXF];
@@ -141,13 +142,24 @@ int wmain(int argc, wchar_t **argv)
 		return 1;
 	}
 	seconds = _wtoi(argv[2]);
-	nfiles = argc - 3;
+	if (argc == 5 && !wcscmp(argv[3], L"-n")) {
+		nfiles = _wtoi(argv[4]);
+		if (nfiles < 1 || nfiles > MAXF)
+			return 1;
+		for (i = 0; i < nfiles; i++) {
+			names[i] = malloc(16 * sizeof(wchar_t));
+			swprintf(names[i], 16, L"repo\\f%04d", i);
+		}
+	} else {
+		nfiles = argc - 3;
+		for (i = 0; i < nfiles; i++)
+			names[i] = argv[3 + i];
+	}
 
 	for (i = 0; i < nfiles; i++) {
 		HANDLE h;
 		DWORD n;
 
-		names[i] = argv[3 + i];
 		swprintf(path, MAX_PATH, L"%ls\\%ls", argv[1], names[i]);
 		h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
 				OPEN_EXISTING, 0, NULL);

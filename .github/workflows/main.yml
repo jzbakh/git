@@ -3,46 +3,146 @@ name: CI
 on: [push]
 
 jobs:
-  gitsees:
-    name: what git.exe sees of placeholders; each cloud operation
+  cloudfiles:
+    name: cloud files, option ${{ matrix.option }}
+    strategy:
+      fail-fast: false
+      matrix:
+        option: [1, 2]
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
-    - name: build the probes with MSVC
+    - name: python
+      shell: pwsh
+      run: |
+        $exe = python -c "import sys; print(sys.executable)"
+        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    - name: build cfprobe with MSVC
       shell: pwsh
       run: |
         $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
-          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1',
-          'cl /nologo /W3 probe\cfstages.c /Fe:cfstages.exe || exit /b 1',
-          'cl /nologo /W3 probe\phattr.c /Fe:phattr.exe || exit /b 1') |
-          Set-Content -Encoding ascii build.bat
-        cmd /c build.bat
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-        New-Item -ItemType Directory names | Out-Null
-        foreach ($n in 'git.exe', 'python.exe', 'phattr.exe') {
-          Copy-Item phattr.exe "names\$n"
-        }
-    - name: each cloud operation, compared to the previous step
-      shell: bash
-      run: |
-        mkdir -p /c/cfs
-        printf 'stage\n' >/c/cfs/f
-        ./cfstages.exe 'C:\cfs' f
+          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1') |
+          Set-Content -Encoding ascii build-cf.bat
+        cmd /c build-cf.bat
+        exit $LASTEXITCODE
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: rule B, with what git.exe sees printed
+    - name: apply option ${{ matrix.option }}
       shell: bash
       run: |
-        git apply probe/rule-b.patch &&
-        git apply probe/git-attrs.patch &&
-        git diff --stat
+        case "${{ matrix.option }}" in
+        1) git apply probe/rule-b.patch;;
+        2) git apply probe/rule-final.patch;;
+        esac && git diff --stat
     - name: build
       shell: bash
       env:
         HOME: ${{ runner.workspace }}
       run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: what git.exe sees
+    - name: OneDrive-like placeholders
       shell: bash
       env:
         HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/gitsees.sh
+      run: . /etc/profile && sh probe/cloudfiles.sh
+
+  perf:
+    name: cost of exposing placeholders
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: python
+      shell: pwsh
+      run: |
+        $exe = python -c "import sys; print(sys.executable)"
+        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    - name: build cfprobe and phattr with MSVC
+      shell: pwsh
+      run: |
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
+          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1',
+          'cl /nologo /W3 probe\phattr.c /Fe:phattr.exe || exit /b 1') |
+          Set-Content -Encoding ascii build-cf.bat
+        cmd /c build-cf.bat
+        exit $LASTEXITCODE
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: build option 1, then option 2
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: |
+        . /etc/profile
+        git apply probe/rule-b.patch
+        make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
+        mkdir opt1 && cp git.exe opt1/
+        git checkout -- compat
+        git apply probe/rule-final.patch
+        make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
+        mkdir opt2 && cp git.exe opt2/
+        git diff --stat
+    - name: git status timings
+      shell: bash
+      env:
+        HOME: ${{ runner.temp }}
+      run: . /etc/profile && sh probe/perf.sh
+
+  checks:
+    name: option 2, file systems, interop, tests
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: install pygit2
+      shell: pwsh
+      run: |
+        python -m pip install --quiet pygit2
+        $exe = python -c "import sys; print(sys.executable)"
+        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    - name: volumes, WinFsp memfs, rclone
+      shell: pwsh
+      run: ./probe/mount.ps1
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: apply option 2
+      shell: bash
+      run: git apply probe/rule-final.patch && git diff --stat
+    - name: build
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
+    - name: per file system, Git 2.56 then this Git
+      shell: bash
+      env:
+        HOME: ${{ runner.temp }}
+      run: |
+        . /etc/profile
+        t=$(cygpath -u "$RUNNER_TEMP")
+        smb="//localhost/${RUNNER_TEMP:0:1}\$${t#/?}/smb"
+        set -- "C:=/c/fsc" "D:=$t/fsc" "FAT32=/f" "exFAT=/g" "ReFS=/h" \
+          "NTFS-vhd=/n" "SMB=$smb" "memfs=/m" "rclone=/r"
+        sh probe/fscheck.sh "/c/Program Files/Git/cmd/git.exe" "$@"
+        sh probe/fscheck.sh "$(pwd)/bin-wrappers/git" "$@"
+    - name: worktree shared with Git 2.56 and libgit2
+      if: always()
+      shell: bash
+      env:
+        HOME: ${{ runner.temp }}
+      run: . /etc/profile && sh probe/interop.sh
+    - name: "issue repro on C:"
+      if: always()
+      shell: pwsh
+      run: powershell -ExecutionPolicy Bypass -File probe\repro-3707.ps1 -Git "$env:GITHUB_WORKSPACE\git.exe"
+    - name: stat-related tests
+      if: always()
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: |
+        . /etc/profile
+        cd t
+        for t in t0010-racy-git.sh t1701-racy-split-index.sh \
+          t2108-update-index-refresh-racy.sh \
+          t7063-status-untracked-cache.sh t7508-status.sh \
+          t7519-status-fsmonitor.sh
+        do
+          sh $t || exit 1
+        done
