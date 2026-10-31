@@ -1,0 +1,111 @@
+diff --git a/compat/mingw-posix.h b/compat/mingw-posix.h
+index 744a69c..80e9c36 100644
+--- a/compat/mingw-posix.h
++++ b/compat/mingw-posix.h
+@@ -374,6 +374,10 @@ static inline void filetime_to_timespec(const FILETIME *ft, struct timespec *ts)
+ 	ts->tv_nsec = (hnsec % 10000000) * 100;
+ }
+ 
++void probe_attrs(const char *what, const wchar_t *wname, size_t wlen,
++		 DWORD attr, DWORD tag, const LARGE_INTEGER *c,
++		 const LARGE_INTEGER *w, const LARGE_INTEGER *ch);
++
+ /*
+  * st_ctim: ChangeTime if it is later than both CreationTime and
+  * LastWriteTime, CreationTime otherwise.
+diff --git a/compat/mingw.c b/compat/mingw.c
+index 3716e33..c1b9ad1 100644
+--- a/compat/mingw.c
++++ b/compat/mingw.c
+@@ -1389,6 +1389,38 @@ static BOOL get_file_attributes(const wchar_t *wpath,
+ 	return FALSE;
+ }
+ 
++void probe_attrs(const char *what, const wchar_t *wname, size_t wlen,
++		 DWORD attr, DWORD tag, const LARGE_INTEGER *c,
++		 const LARGE_INTEGER *w, const LARGE_INTEGER *ch)
++{
++	typedef CHAR (NTAPI *q_fn)(void);
++	static q_fn qp, qt;
++	static int init;
++
++	if (!_wgetenv(L"GIT_PROBE_ATTRS"))
++		return;
++	if (!init) {
++		HMODULE nt = GetModuleHandleW(L"ntdll.dll");
++		FARPROC p;
++
++		p = GetProcAddress(nt,
++			"RtlQueryProcessPlaceholderCompatibilityMode");
++		memcpy(&qp, &p, sizeof(qp));
++		p = GetProcAddress(nt,
++			"RtlQueryThreadPlaceholderCompatibilityMode");
++		memcpy(&qt, &p, sizeof(qt));
++		init = 1;
++	}
++	fprintf(stderr, "probe %-7s %.*ls attr=0x%08lx tag=0x%08lx"
++		" C=%lld W=%lld Ch=%lld Ch>max(C,W)=%d pmode=%d tmode=%d"
++		" tid=%lu\n", what, (int)wlen, wname, (unsigned long)attr,
++		(unsigned long)tag, (long long)c->QuadPart,
++		(long long)w->QuadPart, (long long)ch->QuadPart,
++		ch->QuadPart > c->QuadPart && ch->QuadPart > w->QuadPart,
++		qp ? (int)qp() : -100, qt ? (int)qt() : -100,
++		(unsigned long)GetCurrentThreadId());
++}
++
+ int mingw_lstat(const char *file_name, struct stat *buf)
+ {
+ 	FILE_NETWORK_OPEN_INFORMATION fdata;
+@@ -1408,6 +1440,9 @@ int mingw_lstat(const char *file_name, struct stat *buf)
+ 	}
+ 
+ 	if (get_file_attributes(wfilename, &fdata)) {
++		probe_attrs("lstat", wfilename, wcslen(wfilename),
++			    fdata.FileAttributes, 0, &fdata.CreationTime,
++			    &fdata.LastWriteTime, &fdata.ChangeTime);
+ 		/* for reparse points, get the link tag and length */
+ 		if (fdata.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+ 			char tmpbuf[MAX_LONG_PATH];
+@@ -1479,6 +1514,9 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
+ 		errno = err_win_to_posix(GetLastError());
+ 		return -1;
+ 	}
++	probe_attrs("handle", L"(by handle)", 11, basic.FileAttributes, 0,
++		    &basic.CreationTime, &basic.LastWriteTime,
++		    &basic.ChangeTime);
+ 
+ 	buf->st_ino = 0;
+ 	buf->st_gid = 0;
+@@ -4480,6 +4518,16 @@ int wmain(int argc, const wchar_t **wargv)
+ 
+ 	maybe_redirect_std_handles();
+ 	adjust_symlink_flags();
++	if (_wgetenv(L"GIT_PROBE_EXPOSE")) {
++		typedef CHAR (NTAPI *s_fn)(CHAR);
++		FARPROC p = GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
++			"RtlSetProcessPlaceholderCompatibilityMode");
++		s_fn set;
++
++		memcpy(&set, &p, sizeof(set));
++		if (set)
++			set(2);
++	}
+ 	fsync_object_files = 1;
+ 
+ 	/* determine size of argv and environ conversion buffer */
+diff --git a/compat/win32/fscache.c b/compat/win32/fscache.c
+index a0dd81b..0a4a72c 100644
+--- a/compat/win32/fscache.c
++++ b/compat/win32/fscache.c
+@@ -241,6 +241,11 @@ static struct fsentry *fseentry_create_entry(struct fscache *cache,
+ 			     &(fse->u.s.st_atim));
+ 	filetime_to_timespec((FILETIME *)&(fdata->LastWriteTime),
+ 			     &(fse->u.s.st_mtim));
++	probe_attrs("fscache", fdata->FileName,
++		    fdata->FileNameLength / sizeof(wchar_t),
++		    fdata->FileAttributes, fdata->EaSize,
++		    &fdata->CreationTime, &fdata->LastWriteTime,
++		    &fdata->ChangeTime);
+ 	filetimes_to_ctim(&(fdata->ChangeTime), &(fdata->CreationTime),
+ 			  &(fdata->LastWriteTime), &(fse->u.s.st_ctim));
+ 	if (fdata->EaSize > 0 &&
