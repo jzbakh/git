@@ -1430,7 +1430,8 @@ int mingw_lstat(const char *file_name, struct stat *buf)
 		filetime_to_timespec((FILETIME *)&(fdata.LastWriteTime),
 				     &(buf->st_mtim));
 		filetimes_to_ctim(&(fdata.ChangeTime), &(fdata.CreationTime),
-				  &(fdata.LastWriteTime), &(buf->st_ctim));
+				  &(fdata.LastWriteTime), fdata.FileAttributes,
+				  &(buf->st_ctim));
 		if (S_ISREG(buf->st_mode) &&
 		    are_wsl_compatible_mode_bits_enabled()) {
 			copy_wsl_mode_bits_from_disk(wfilename, -1,
@@ -1492,7 +1493,8 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
 	filetime_to_timespec((FILETIME *)&(basic.LastWriteTime),
 			     &(buf->st_mtim));
 	filetimes_to_ctim(&(basic.ChangeTime), &(basic.CreationTime),
-			  &(basic.LastWriteTime), &(buf->st_ctim));
+			  &(basic.LastWriteTime), basic.FileAttributes,
+			  &(buf->st_ctim));
 	if (are_wsl_compatible_mode_bits_enabled())
 	    get_wsl_mode_bits_by_handle(hnd, &buf->st_mode);
 	return 0;
@@ -4434,6 +4436,21 @@ static void adjust_symlink_flags(void)
 	}
 }
 
+/*
+ * Windows may hide that a file is a cloud file placeholder (OneDrive and
+ * others) from lstat() but not from the FSCache. Expose placeholders, so
+ * that filetimes_to_ctim() gets the same attributes from both.
+ */
+static void expose_placeholders(void)
+{
+	DECLARE_PROC_ADDR(ntdll.dll, CHAR, NTAPI,
+			  RtlSetProcessPlaceholderCompatibilityMode, CHAR);
+
+	/* 2: PHCM_EXPOSE_PLACEHOLDERS */
+	if (INIT_PROC_ADDR(RtlSetProcessPlaceholderCompatibilityMode))
+		RtlSetProcessPlaceholderCompatibilityMode(2);
+}
+
 static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
 {
 	if (ctrl_type != CTRL_C_EVENT)
@@ -4480,6 +4497,7 @@ int wmain(int argc, const wchar_t **wargv)
 
 	maybe_redirect_std_handles();
 	adjust_symlink_flags();
+	expose_placeholders();
 	fsync_object_files = 1;
 
 	/* determine size of argv and environ conversion buffer */

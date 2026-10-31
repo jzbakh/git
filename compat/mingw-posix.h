@@ -375,22 +375,23 @@ static inline void filetime_to_timespec(const FILETIME *ft, struct timespec *ts)
 }
 
 /*
- * st_ctim: the latest of ChangeTime, CreationTime and LastWriteTime.
- * FAT and exFAT lack ChangeTime (it reads as 0, 1980-01-01 or LastWriteTime
- * depending on the API), but the latest of the three is consistent.
+ * st_ctim: ChangeTime if it is later than both CreationTime and
+ * LastWriteTime, CreationTime otherwise. Always CreationTime for reparse
+ * points, such as cloud file placeholders, whose ChangeTime moves when
+ * they are pinned, unpinned, hydrated or dehydrated.
  */
 static inline void filetimes_to_ctim(const LARGE_INTEGER *change,
 				     const LARGE_INTEGER *creation,
 				     const LARGE_INTEGER *last_write,
-				     struct timespec *ts)
+				     DWORD attributes, struct timespec *ts)
 {
-	const LARGE_INTEGER *latest = change;
+	const LARGE_INTEGER *t = creation;
 
-	if (creation->QuadPart > latest->QuadPart)
-		latest = creation;
-	if (last_write->QuadPart > latest->QuadPart)
-		latest = last_write;
-	filetime_to_timespec((const FILETIME *)latest, ts);
+	if (!(attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+	    change->QuadPart > creation->QuadPart &&
+	    change->QuadPart > last_write->QuadPart)
+		t = change;
+	filetime_to_timespec((const FILETIME *)t, ts);
 }
 
 struct mingw_stat {
