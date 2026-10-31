@@ -3,36 +3,8 @@ name: CI
 on: [push]
 
 jobs:
-  probe:
-    name: probe ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v7
-    - name: volumes, WinFsp memfs, rclone
-      shell: pwsh
-      run: ./probe/mount.ps1
-    - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: build probe
-      shell: bash
-      run: . /etc/profile && gcc -O2 -Wall -municode -o probe-gcc.exe probe/probe-3707.c
-    - name: write methods and metadata changes, per volume
-      shell: pwsh
-      run: |
-        $t = $env:RUNNER_TEMP
-        $smb = '\\localhost\' + $t.Substring(0, 1) + '$' + $t.Substring(2) + '\smb'
-        foreach ($d in @('C:\', $t, 'F:\', 'G:\', 'H:\', 'N:\', $smb, 'M:\', 'R:\')) {
-          if (Test-Path $d) {
-            .\probe-gcc.exe writes $d
-            .\probe-gcc.exe scenario $d
-          } else { "SKIP $d (absent)" }
-        }
-
-  git:
-    name: git, rule ${{ matrix.rule }}
+  cloudfiles:
+    name: cloud files, rule ${{ matrix.rule }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,15 +12,20 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
-    - name: install pygit2
+    - name: python
       shell: pwsh
       run: |
-        python -m pip install --quiet pygit2
         $exe = python -c "import sys; print(sys.executable)"
         "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: volumes, WinFsp memfs, rclone
+    - name: build cfprobe with MSVC
       shell: pwsh
-      run: ./probe/mount.ps1
+      run: |
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
+          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1') |
+          Set-Content -Encoding ascii build-cf.bat
+        cmd /c build-cf.bat
+        exit $LASTEXITCODE
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
     - name: apply rule B
       if: matrix.rule == 'B'
@@ -59,40 +36,8 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: . /etc/profile && make -j$(nproc) NO_RUST=1 NO_PERL=1
-    - name: per file system, Git 2.56 then this Git
+    - name: OneDrive-like placeholders
       shell: bash
       env:
         HOME: ${{ runner.temp }}
-      run: |
-        . /etc/profile
-        t=$(cygpath -u "$RUNNER_TEMP")
-        smb="//localhost/${RUNNER_TEMP:0:1}\$${t#/?}/smb"
-        set -- "C:=/c/fsc" "D:=$t/fsc" "FAT32=/f" "exFAT=/g" "ReFS=/h" \
-          "NTFS-vhd=/n" "SMB=$smb" "memfs=/m" "rclone=/r"
-        sh probe/fscheck.sh "/c/Program Files/Git/cmd/git.exe" "$@"
-        sh probe/fscheck.sh "$(pwd)/bin-wrappers/git" "$@"
-    - name: worktree shared with Git 2.56 and libgit2
-      if: always()
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/interop.sh
-    - name: "issue repro on C:"
-      if: always()
-      shell: pwsh
-      run: powershell -ExecutionPolicy Bypass -File probe\repro-3707.ps1 -Git "$env:GITHUB_WORKSPACE\git.exe"
-    - name: stat-related tests
-      if: always()
-      shell: bash
-      env:
-        HOME: ${{ runner.workspace }}
-      run: |
-        . /etc/profile
-        cd t
-        for t in t0010-racy-git.sh t1701-racy-split-index.sh \
-          t2108-update-index-refresh-racy.sh \
-          t7063-status-untracked-cache.sh t7508-status.sh \
-          t7519-status-fsmonitor.sh
-        do
-          sh $t || exit 1
-        done
+      run: . /etc/profile && sh probe/cloudfiles.sh
