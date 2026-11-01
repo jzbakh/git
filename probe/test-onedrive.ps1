@@ -162,7 +162,14 @@ foreach ($c in $cases) {
 Start-Sleep -Seconds 2
 foreach ($c in $cases) { [void](G $c @('update-index', '-q', '--refresh')) }
 
-if (-not $SelfTest) {
+if ($SelfTest) {
+	# new files have FILE_ATTRIBUTE_ARCHIVE: check that cfattr reads them all
+	foreach ($c in $cases) {
+		$n = Count-With $c 0x20
+		if ($n -ne $N) { throw "cfattr: $n of $N files read in $($c.Dir)" }
+	}
+	Write-Host "cfattr read the attributes of all $($N * @($cases).Count) files"
+} else {
 	Wait-For 'OneDrive to upload the files' 600 {
 		foreach ($c in $cases) {
 			if ((Count-With $c $REPARSE_POINT) -lt $N) { return $false }
