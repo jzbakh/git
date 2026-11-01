@@ -24,37 +24,43 @@ jobs:
         HOME: ${{ runner.workspace }}
       run: |
         . /etc/profile
-        deps () {	# copy the /ucrt64 DLLs that FILE needs, recursively
-          dir=$(dirname "$1")
-          todo="$1"
-          while [ -n "$todo" ]
-          do
-            set -- $todo
-            f=$1
-            shift
-            todo="$*"
-            for n in $(objdump -p "$f" | sed -n 's/^[[:space:]]*DLL Name: //p' | tr -d '\r')
-            do
-              if [ -f "/ucrt64/bin/$n" ] && [ ! -f "$dir/$n" ]
-              then
-                cp "/ucrt64/bin/$n" "$dir/"
-                todo="$todo $dir/$n"
-              fi
-            done
-          done
-        }
         git apply probe/rule-b.patch
-        make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
+        make -j$NUMBER_OF_PROCESSORS NO_RUST=1 NO_PERL=1 >/dev/null
         mkdir -p bundle/rejected && cp git.exe bundle/rejected/
         git checkout -- compat
         git apply probe/rule-final.patch
-        make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
+        make -j$NUMBER_OF_PROCESSORS NO_RUST=1 NO_PERL=1 >/dev/null
         mkdir -p bundle/pr && cp git.exe bundle/pr/
         git diff --stat
-        deps bundle/rejected/git.exe
-        deps bundle/pr/git.exe
         cp cfattr.exe probe/test-onedrive.ps1 probe/README-onedrive.txt bundle/
         ls -la bundle bundle/rejected bundle/pr
+    - name: add the DLLs that git.exe needs, with dumpbin
+      shell: pwsh
+      run: |
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL && set" | ForEach-Object {
+          if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+        }
+        $sdk = Get-ChildItem 'D:\' -Directory -Filter 'git-sdk-64-*' | Select-Object -First 1
+        $bin = Join-Path $sdk.FullName 'ucrt64\bin'
+        foreach ($d in 'rejected', 'pr') {
+          $todo = New-Object System.Collections.Generic.Queue[string]
+          $todo.Enqueue("bundle\$d\git.exe")
+          while ($todo.Count) {
+            $f = $todo.Dequeue()
+            $names = dumpbin /nologo /dependents $f | ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -match '^[^ ]+\.dll$' }
+            foreach ($n in $names) {
+              $src = Join-Path $bin $n
+              $dst = Join-Path "bundle\$d" $n
+              if ((Test-Path $src) -and -not (Test-Path $dst)) {
+                Copy-Item $src $dst
+                $todo.Enqueue($dst)
+              }
+            }
+          }
+          Get-ChildItem "bundle\$d" | Format-Table Name, Length -AutoSize
+        }
     - name: check the bundle with Windows PowerShell, without the SDK
       shell: powershell
       run: |
