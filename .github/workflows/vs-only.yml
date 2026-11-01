@@ -1,6 +1,6 @@
 name: win+VS only (drop!)
 
-on: [push]
+on: [workflow_dispatch]
 
 env:
   DEVELOPER: 1

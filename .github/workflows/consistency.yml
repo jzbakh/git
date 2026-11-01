@@ -1,0 +1,34 @@
+name: st_ctim consistency (drop!)
+
+on: [push]
+
+jobs:
+  consistency:
+    name: FSCache, lstat() and stat() after metadata changes (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: build ctprobe with MSVC
+      shell: pwsh
+      run: |
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
+          'cl /nologo /W3 probe\ctprobe.c /Fe:ctprobe.exe || exit /b 1') |
+          Set-Content -Encoding ascii build-ct.bat
+        cmd /c build-ct.bat
+        exit $LASTEXITCODE
+    - uses: git-for-windows/setup-git-for-windows-sdk@v2
+    - name: build Git (the pull request's commits)
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: . /etc/profile && make -j$NUMBER_OF_PROCESSORS NO_RUST=1 NO_PERL=1 >/dev/null && git log -2 --format='%h %s'
+    - name: metadata-only changes
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: . /etc/profile && GIT_BUILD="$PWD" PROBE="$(cygpath -w "$PWD/ctprobe.exe")" sh probe/consistency.sh
