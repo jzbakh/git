@@ -25,7 +25,8 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: . /etc/profile && make -j$NUMBER_OF_PROCESSORS NO_RUST=1 >/dev/null && git log -1 --format='%h %s'
-    - name: run the slice as CI does, printing each test as it ends
+    - name: run the slice as CI does
+      timeout-minutes: 30
       shell: bash
       env:
         HOME: ${{ runner.workspace }}
@@ -34,16 +35,19 @@ jobs:
         export DEFAULT_TEST_TARGET=prove GIT_TEST_CLONE_2GB=true
         export GIT_PROVE_OPTS='--timer --jobs 10'
         export GIT_TEST_OPTS='--verbose-log -x --no-chain-lint --no-bin-wrappers'
-        TESTS=$(cd t && ./helper/test-tool path-utils slice-tests ${{ matrix.slice }} 10 t[0-9]*.sh)
-        echo "$(echo $TESTS | wc -w) tests; timeout: $(command -v timeout || echo missing)"
-        set +e
-        timeout 2400 make --quiet -C t T="$(echo $TESTS)" >/tmp/prove.txt 2>&1
-        echo "make exit code: $?"
-        grep -E '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt | sort -t' ' -k1,1 | tail -5
+        (cd t && ./helper/test-tool path-utils slice-tests ${{ matrix.slice }} 10 t[0-9]*.sh) >/tmp/tests.txt
+        echo "$(wc -l </tmp/tests.txt) tests"
+        make --quiet -C t T="$(tr '\n' ' ' </tmp/tests.txt)" >/tmp/prove.txt 2>&1
+    - name: report, also after a timeout
+      if: always()
+      shell: bash
+      run: |
+        . /etc/profile
+        echo "finished: $(grep -cE '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt) of $(wc -l </tmp/tests.txt)"
         echo "slowest:"
-        grep -E '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt | sed -n 's/.* \([0-9]*\) ms .*/\1 &/p' | sort -n | tail -5
-        echo "tests that did not finish:"
-        for t in $TESTS; do grep -q "\] $t " /tmp/prove.txt || echo "  $t"; done
+        grep -E '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt | sed -n 's/^.* \([0-9][0-9]*\) ms .*$/\1 &/p' | sort -n | tail -5
+        echo "did not finish:"
+        while read -r t; do grep -q "\] $t " /tmp/prove.txt || echo "  $t"; done </tmp/tests.txt
         echo "failures:"
-        grep -E 'Failed|not ok|Dubious' /tmp/prove.txt | head -20 || true
-        tail -5 /tmp/prove.txt
+        grep -E 'Dubious|Failed|not ok' /tmp/prove.txt | head -20 || echo "  none"
+        tail -4 /tmp/prove.txt
