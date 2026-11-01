@@ -3,75 +3,46 @@ name: CI
 on: [push]
 
 jobs:
-  bundle:
-    name: OneDrive test bundle for a real PC
+  slices:
+    name: time each test of a stalled slice (${{ matrix.ref }}, slice ${{ matrix.slice }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ref: changetime-ctime-v4-c2
+            slice: 1
+          - ref: changetime-ctime-v3-ci
+            slice: 7
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v7
-    - name: build cfattr with MSVC
-      shell: pwsh
-      run: |
-        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-        @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
-          'cl /nologo /W3 probe\cfattr.c /Fe:cfattr.exe || exit /b 1') |
-          Set-Content -Encoding ascii build-cf.bat
-        cmd /c build-cf.bat
-        exit $LASTEXITCODE
+      with:
+        ref: ${{ matrix.ref }}
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: build the rejected variant, then the pull request
+    - name: build
+      shell: bash
+      env:
+        HOME: ${{ runner.workspace }}
+      run: . /etc/profile && make -j$NUMBER_OF_PROCESSORS NO_RUST=1 >/dev/null && git log -1 --format='%h %s'
+    - name: run each test of the slice, with a 15-minute limit
       shell: bash
       env:
         HOME: ${{ runner.workspace }}
       run: |
         . /etc/profile
-        git apply probe/rule-b.patch
-        make -j$NUMBER_OF_PROCESSORS NO_RUST=1 NO_PERL=1 >/dev/null
-        mkdir -p bundle/rejected && cp git.exe bundle/rejected/
-        git checkout -- compat
-        git apply probe/rule-final.patch
-        make -j$NUMBER_OF_PROCESSORS NO_RUST=1 NO_PERL=1 >/dev/null
-        mkdir -p bundle/pr && cp git.exe bundle/pr/
-        git diff --stat
-        cp cfattr.exe probe/test-onedrive.ps1 probe/README-onedrive.txt bundle/
-        ls -la bundle bundle/rejected bundle/pr
-    - name: add the DLLs that git.exe needs, with dumpbin
-      shell: pwsh
-      run: |
-        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-        cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL && set" | ForEach-Object {
-          if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+        cd t
+        TESTS=$(./helper/test-tool path-utils slice-tests ${{ matrix.slice }} 10 t[0-9]*.sh)
+        echo "$(echo $TESTS | wc -w) tests"
+        run_one () {
+          s=$(date +%s)
+          timeout 900 sh "$1" --no-bin-wrappers --no-chain-lint >"/tmp/diag-$1.log" 2>&1
+          rc=$?
+          echo "$(( $(date +%s) - s ))s rc=$rc $1"
         }
-        $sdk = Get-ChildItem 'D:\' -Directory -Filter 'git-sdk-64-*' | Select-Object -First 1
-        $bin = Join-Path $sdk.FullName 'ucrt64\bin'
-        foreach ($d in 'rejected', 'pr') {
-          $todo = New-Object System.Collections.Generic.Queue[string]
-          $todo.Enqueue("bundle\$d\git.exe")
-          while ($todo.Count) {
-            $f = $todo.Dequeue()
-            $names = dumpbin /nologo /dependents $f | ForEach-Object { $_.Trim() } |
-              Where-Object { $_ -match '^[^ ]+\.dll$' }
-            foreach ($n in $names) {
-              $src = Join-Path $bin $n
-              $dst = Join-Path "bundle\$d" $n
-              if ((Test-Path $src) -and -not (Test-Path $dst)) {
-                Copy-Item $src $dst
-                $todo.Enqueue($dst)
-              }
-            }
-          }
-          Get-ChildItem "bundle\$d" | Format-Table Name, Length -AutoSize
-        }
-    - name: check the bundle with Windows PowerShell, without the SDK
-      shell: powershell
-      run: |
-        $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
-        & .\bundle\rejected\git.exe version
-        & .\bundle\pr\git.exe version
-        powershell -NoProfile -ExecutionPolicy Bypass -File .\bundle\test-onedrive.ps1 -SelfTest
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-        Get-Content .\bundle\result-*.txt
-        Remove-Item .\bundle\result-*.txt
-    - uses: actions/upload-artifact@v7
-      with:
-        name: git-3707-onedrive-test
-        path: bundle
+        export -f run_one
+        printf '%s\n' $TESTS | xargs -P 10 -I{} bash -c 'run_one {}' >/tmp/times.txt
+        sort -n /tmp/times.txt | tail -15
+        echo "not ok (rc != 0):"
+        grep -v ' rc=0 ' /tmp/times.txt || echo "none"
+        echo "longest: $(sort -n /tmp/times.txt | tail -1)"
