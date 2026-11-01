@@ -3,43 +3,69 @@ name: CI
 on: [push]
 
 jobs:
-  offline:
-    name: placeholders whose provider is not running
+  bundle:
+    name: OneDrive test bundle for a real PC
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
-    - name: python
-      shell: pwsh
-      run: |
-        $exe = python -c "import sys; print(sys.executable)"
-        "PYEXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: build cfprobe and phattr with MSVC
+    - name: build cfattr with MSVC
       shell: pwsh
       run: |
         $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         @("call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >NUL || exit /b 1",
-          'cl /nologo /W3 probe\cfprobe.c /Fe:cfprobe.exe || exit /b 1',
-          'cl /nologo /W3 probe\phattr.c /Fe:phattr.exe || exit /b 1') |
+          'cl /nologo /W3 probe\cfattr.c /Fe:cfattr.exe || exit /b 1') |
           Set-Content -Encoding ascii build-cf.bat
         cmd /c build-cf.bat
         exit $LASTEXITCODE
     - uses: git-for-windows/setup-git-for-windows-sdk@v2
-    - name: build option 1, then option 2
+    - name: build the rejected variant, then the pull request
       shell: bash
       env:
         HOME: ${{ runner.workspace }}
       run: |
         . /etc/profile
+        deps () {	# copy the /ucrt64 DLLs that FILE needs, recursively
+          dir=$(dirname "$1")
+          todo="$1"
+          while [ -n "$todo" ]
+          do
+            set -- $todo
+            f=$1
+            shift
+            todo="$*"
+            for n in $(objdump -p "$f" | sed -n 's/^[[:space:]]*DLL Name: //p' | tr -d '\r')
+            do
+              if [ -f "/ucrt64/bin/$n" ] && [ ! -f "$dir/$n" ]
+              then
+                cp "/ucrt64/bin/$n" "$dir/"
+                todo="$todo $dir/$n"
+              fi
+            done
+          done
+        }
         git apply probe/rule-b.patch
         make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
-        mkdir opt1 && cp git.exe opt1/
+        mkdir -p bundle/rejected && cp git.exe bundle/rejected/
         git checkout -- compat
         git apply probe/rule-final.patch
         make -j$(nproc) NO_RUST=1 NO_PERL=1 >/dev/null
-        mkdir opt2 && cp git.exe opt2/
+        mkdir -p bundle/pr && cp git.exe bundle/pr/
         git diff --stat
-    - name: git status with the provider not running
-      shell: bash
-      env:
-        HOME: ${{ runner.temp }}
-      run: . /etc/profile && sh probe/offline.sh
+        deps bundle/rejected/git.exe
+        deps bundle/pr/git.exe
+        cp cfattr.exe probe/test-onedrive.ps1 probe/README-onedrive.txt bundle/
+        ls -la bundle bundle/rejected bundle/pr
+    - name: check the bundle with Windows PowerShell, without the SDK
+      shell: powershell
+      run: |
+        $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
+        & .\bundle\rejected\git.exe version
+        & .\bundle\pr\git.exe version
+        powershell -NoProfile -ExecutionPolicy Bypass -File .\bundle\test-onedrive.ps1 -SelfTest
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        Get-Content .\bundle\result-*.txt
+        Remove-Item .\bundle\result-*.txt
+    - uses: actions/upload-artifact@v7
+      with:
+        name: git-3707-onedrive-test
+        path: bundle
