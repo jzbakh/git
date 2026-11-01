@@ -25,24 +25,25 @@ jobs:
       env:
         HOME: ${{ runner.workspace }}
       run: . /etc/profile && make -j$NUMBER_OF_PROCESSORS NO_RUST=1 >/dev/null && git log -1 --format='%h %s'
-    - name: run each test of the slice, with a 15-minute limit
+    - name: run the slice as CI does, printing each test as it ends
       shell: bash
       env:
         HOME: ${{ runner.workspace }}
       run: |
         . /etc/profile
-        cd t
-        TESTS=$(./helper/test-tool path-utils slice-tests ${{ matrix.slice }} 10 t[0-9]*.sh)
-        echo "$(echo $TESTS | wc -w) tests"
-        run_one () {
-          s=$(date +%s)
-          timeout 900 sh "$1" --no-bin-wrappers --no-chain-lint >"/tmp/diag-$1.log" 2>&1
-          rc=$?
-          echo "$(( $(date +%s) - s ))s rc=$rc $1"
-        }
-        export -f run_one
-        printf '%s\n' $TESTS | xargs -P 10 -I{} bash -c 'run_one {}' >/tmp/times.txt
-        sort -n /tmp/times.txt | tail -15
-        echo "not ok (rc != 0):"
-        grep -v ' rc=0 ' /tmp/times.txt || echo "none"
-        echo "longest: $(sort -n /tmp/times.txt | tail -1)"
+        export DEFAULT_TEST_TARGET=prove GIT_TEST_CLONE_2GB=true
+        export GIT_PROVE_OPTS='--timer --jobs 10'
+        export GIT_TEST_OPTS='--verbose-log -x --no-chain-lint --no-bin-wrappers'
+        TESTS=$(cd t && ./helper/test-tool path-utils slice-tests ${{ matrix.slice }} 10 t[0-9]*.sh)
+        echo "$(echo $TESTS | wc -w) tests; timeout: $(command -v timeout || echo missing)"
+        set +e
+        timeout 2400 make --quiet -C t T="$(echo $TESTS)" >/tmp/prove.txt 2>&1
+        echo "make exit code: $?"
+        grep -E '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt | sort -t' ' -k1,1 | tail -5
+        echo "slowest:"
+        grep -E '^\[[0-9:]+\] t[0-9]' /tmp/prove.txt | sed -n 's/.* \([0-9]*\) ms .*/\1 &/p' | sort -n | tail -5
+        echo "tests that did not finish:"
+        for t in $TESTS; do grep -q "\] $t " /tmp/prove.txt || echo "  $t"; done
+        echo "failures:"
+        grep -E 'Failed|not ok|Dubious' /tmp/prove.txt | head -20 || true
+        tail -5 /tmp/prove.txt
